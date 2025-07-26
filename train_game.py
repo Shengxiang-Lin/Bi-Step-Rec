@@ -40,7 +40,7 @@ def train(
         "v_proj",
     ],
     # llm hyperparams
-    train_on_inputs: bool = True,  # if False, masks out inputs in loss
+    train_on_inputs: bool = False,  # if False, masks out inputs in loss
     group_by_length: bool = False,  # faster, but produces an odd training loss curve
     # wandb params
     wandb_project: str = "",
@@ -175,7 +175,7 @@ def train(
     for i in range(len(val_data_list)):
         val_data_list[i] = val_data_list[i].map(lambda x: generate_and_tokenize_prompt(x))
     train_data = concatenate_datasets([_["train"] for _ in train_data_list])
-    train_data = train_data.select(range(min(10000, len(train_data))))  
+    print(train_data[0])
     val_data = concatenate_datasets([_["train"] for _ in val_data_list])
     if resume_from_checkpoint:
         # Check the available weights and load them

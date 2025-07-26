@@ -30,10 +30,10 @@ except:  # noqa: E722
 def main(
     load_8bit: bool = False,
     base_model: str = "base_models/llama-7b",
-    lora_weights: str = "lora-alpaca-game/checkpoint-168",
-    test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/game.json",
-    batch_size: int = 8,
+    lora_weights: str = "lora-alpaca-movie/checkpoint-32",
+    test_data_path: str = "data/movie/dataset/processed/valid_50.json",
+    result_json_data: str = "data/movie/result/movie.json",
+    batch_size: int = 2,
 ):
     assert base_model, "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
 
@@ -94,7 +94,7 @@ def main(
         top_p=0.9,
         top_k=40,
         num_beams=4,
-        max_new_tokens=128,
+        max_new_tokens=512,
         **kwargs,
     ):
         prompts = [generate_prompt(instruction, input) for instruction, input in zip(instructions, inputs)]
