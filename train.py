@@ -2,20 +2,12 @@ import os
 os.environ['LD_LIBRARY_PATH'] = 'YOUR_CONDA_ENV/lib'
 import sys
 from typing import List
-
 import numpy as np 
 import fire
 import torch
 import transformers
 from datasets import load_dataset, concatenate_datasets
 from transformers import EarlyStoppingCallback
-# from transformers import AutoModel, AutoTokenizer
-"""
-Unused imports:`
-import torch.nn as nn 
-import bitsandbytes as bnb
-"""
-
 from peft import (  # noqa: E402
     LoraConfig,
     get_peft_model,
@@ -25,19 +17,18 @@ from peft import (  # noqa: E402
 )
 from transformers import LlamaForCausalLM, LlamaTokenizer  # noqa: F402
 
-
 def train(
     # model/data params
     base_model: str = "base_models/llama-7b",  # the only required argument
-    train_data_path: List[str] = ["data/movie/train.json"],
-    val_data_path: List[str] = ["data/movie/valid_5000.json"],
-    output_dir: str = "./lora-alpaca-movie",
-    sample: int = -1,
+    train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
+    val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
+    output_dir: str = "./lora-alpaca-game",
+    sample: int = 1024,
     seed: int = 0,
     # training hyperparams
     batch_size: int = 128,
-    micro_batch_size: int = 4,
-    num_epochs: int = 3,
+    micro_batch_size: int = 8,
+    num_epochs: int = 50,
     learning_rate: float = 3e-4,
     cutoff_len: int = 512,
     # lora hyperparams
@@ -57,7 +48,6 @@ def train(
     wandb_watch: str = "",  # options: false | gradients | all
     wandb_log_model: str = "",  # options: false | true
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
-
 ):
     print(
         f"Training Alpaca-LoRA model with params:\n"
@@ -89,14 +79,12 @@ def train(
     ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
     gradient_accumulation_steps = batch_size // micro_batch_size
     # print(f"gradient_accumulation_steps: {gradient_accumulation_steps}")
-
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
-
     # Check if parameter passed or if set within environ
     use_wandb = len(wandb_project) > 0 or (
         "WANDB_PROJECT" in os.environ and len(os.environ["WANDB_PROJECT"]) > 0
@@ -118,12 +106,10 @@ def train(
     )
     # model.set_tau(tau)
     tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
-
     tokenizer.pad_token_id = (
         0  # unk. we want this to be different from the eos token
     )
     tokenizer.padding_side = "left"  # Allow batched inference
-
     def tokenize(prompt, add_eos_token=True):
         # there's probably a way to do this with the tokenizer settings
         # but again, gotta move fast
@@ -143,9 +129,8 @@ def train(
             result["attention_mask"].append(1)
 
         result["labels"] = result["input_ids"].copy()
-
         return result
-
+    
     def generate_and_tokenize_prompt(data_point):
         full_prompt = generate_prompt(data_point)
         tokenized_full_prompt = tokenize(full_prompt)
@@ -162,7 +147,6 @@ def train(
         return tokenized_full_prompt
 
     model = prepare_model_for_kbit_training(model)
-
     config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -172,23 +156,18 @@ def train(
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, config)
-
-
     train_data_list = []
     val_data_list = []
-
     for path in train_data_path:
         if path.endswith(".json"):
             train_data_list.append(load_dataset("json", data_files=path))
         else:
             train_data_list.append(load_dataset(path))
-
     for path in val_data_path:
         if path.endswith(".json"):
             val_data_list.append(load_dataset("json", data_files=path))
         else:
             val_data_list.append(load_dataset(path))
-
     for i in range(len(train_data_list)):
         train_data_list[i]["train"] = train_data_list[i]["train"].shuffle(seed=seed).select(range(sample)) if sample > -1 else train_data_list[i]["train"].shuffle(seed=seed)
         train_data_list[i]["train"] = train_data_list[i]["train"].shuffle(seed=seed)
@@ -198,9 +177,6 @@ def train(
     train_data = concatenate_datasets([_["train"] for _ in train_data_list])
     train_data = train_data.select(range(min(10000, len(train_data))))  
     val_data = concatenate_datasets([_["train"] for _ in val_data_list])
-
-    # train_data = train_data.shuffle(seed=42)[:sample] if sample > -1 else train_data
-    # print(len(train_data))
     if resume_from_checkpoint:
         # Check the available weights and load them
         checkpoint_name = os.path.join(
@@ -256,25 +232,20 @@ def train(
         callbacks = [EarlyStoppingCallback(early_stopping_patience=5)]
     )
     model.config.use_cache = False
-
     old_state_dict = model.state_dict
     model.state_dict = (
         lambda self, *_, **__: get_peft_model_state_dict(
             self, old_state_dict()
         )
     ).__get__(model, type(model))
-
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-
     model.save_pretrained(output_dir)
-
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )
-
 
 def generate_prompt(data_point):
     # sorry about the formatting disaster gotta move fast

@@ -1,5 +1,4 @@
 from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
-import transformers
 import torch
 import os
 import math
@@ -22,12 +21,13 @@ model = LlamaForCausalLM.from_pretrained(
     base_model,
     torch_dtype=torch.float16,
     device_map="auto",
+    local_files_only=True
 )
 device = model.device
 print(f"Using device: {device}")
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-f = open(os.path.join(script_dir, 'id2name.txt'), 'r')
+f = open(os.path.join(script_dir, 'dataset/id2name.txt'), 'r')
 items = f.readlines()
 item_names = [_.split('\t')[0].strip("\"\n").strip(" ") for _ in items]
 item_ids = [_ for _ in range(len(item_names))]
@@ -39,7 +39,7 @@ for i in range(len(item_names)):
         item_dict[item_names[i]].append(item_ids[i])
 result_dict = dict()
 
-movie_embedding_path = os.path.join(script_dir, 'item_embedding.pt')
+movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding.pt')
 movie_embedding = torch.load(movie_embedding_path, weights_only=True).to(device)
 
 import pandas as pd
@@ -121,5 +121,5 @@ for p in path:
     result_dict[p]["NDCG"] = NDCG
     result_dict[p]["HR"] = HR
 
-f = open('./game_evaluation.json', 'w')    
+f = open('data/game/result/game_evaluation.json', 'w')    
 json.dump(result_dict, f, indent=4)

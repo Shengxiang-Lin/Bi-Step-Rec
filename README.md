@@ -17,15 +17,17 @@ cd data/game
 python process.py
 python embedding.py
 ```
+```
+python train.py
+python inference.py
+python data/game/evaluate.py --input_dir data/game/result
+```
+
 
 movie    
 ```
 python train.py
 python inference.py  --base_model base_models/llama-7b --lora_weights lora-alpaca-movie  --test_data_path data/movie/test_5000.json --result_json_data ./movie_result/movie.json
 python ./data/movie/evaluate.py --input_dir ./movie_result
-
 ```
 game  
-python train.py
-python inference.py  --base_model base_models/llama-7b --lora_weights lora-alpaca-game  --test_data_path data/movie/test_5000.json --result_json_data ./movie_result/movie.json
-python ./data/game/evaluate.py --input_dir ./game_result
