@@ -41,7 +41,8 @@ result_dict = dict()
 
 movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding.pt')
 movie_embedding = torch.load(movie_embedding_path, weights_only=True).to(device)
-
+num_items = movie_embedding.size(0) 
+print(f"Loaded movie embeddings with shape: {movie_embedding.shape}")
 import pandas as pd
 
 for p in path:
@@ -59,9 +60,12 @@ for p in path:
     import json
     test_data = json.load(f)
     f.close()
-    text = [_["predict"][0].strip("\"") for _ in test_data]
+    #text = [_["predict"][0].strip("\"") for _ in test_data]
+    #text = [_["predict"][0].strip("\"") for _ in test_data if _["predict"] is not None]
+    filtered_test_data = [_ for _ in test_data if _["predict"] is not None]
+    text = [_["predict"][0].strip("\"") for _ in filtered_test_data]
     tokenizer.padding_side = "left"
-
+    test_data = filtered_test_data
     def batch(list, batch_size=1):
         chunk_size = (len(list) - 1) // batch_size + 1
         for i in range(chunk_size):
@@ -104,8 +108,9 @@ for p in path:
             target_item = test_data[i]['output'].strip("\"").strip(" ")
             minID = 20000
             for _ in item_dict[target_item]:
-                if rank[i][_].item() < minID:
-                    minID = rank[i][_].item()
+                if _ < rank.shape[1]:
+                    if rank[i][_].item() < minID:
+                        minID = rank[i][_].item()
             if minID < topk:
                 S= S+ (1 / math.log(minID + 2))
                 SS = SS + 1

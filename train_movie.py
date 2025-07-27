@@ -4,6 +4,7 @@ import sys
 from typing import List
 import numpy as np 
 import fire
+import random
 import torch
 import transformers
 from datasets import load_dataset, concatenate_datasets
@@ -15,7 +16,7 @@ from peft import (  # noqa: E402
     prepare_model_for_kbit_training, 
     set_peft_model_state_dict,
 )
-from transformers import LlamaForCausalLM, LlamaTokenizer  # noqa: F402
+from transformers import LlamaForCausalLM, LlamaTokenizer, TrainerCallback  # noqa: F402
 
 def train(
     # model/data params
@@ -175,9 +176,63 @@ def train(
     for i in range(len(val_data_list)):
         val_data_list[i] = val_data_list[i].map(lambda x: generate_and_tokenize_prompt(x))
     train_data = concatenate_datasets([_["train"] for _ in train_data_list])
-    train_data = train_data.select(range(min(10000, len(train_data))))  
     print(train_data[0])
     val_data = concatenate_datasets([_["train"] for _ in val_data_list])
+    raw_train_data = []
+    for path in train_data_path:
+        if path.endswith(".json"):
+            data = load_dataset("json", data_files=path)["train"]
+        else:
+            data = load_dataset(path)["train"]
+        if sample > -1:
+            data = data.shuffle(seed=seed).select(range(sample))
+        else:
+            data = data.shuffle(seed=seed)
+        raw_train_data.append(data)
+    raw_train_data = concatenate_datasets(raw_train_data)
+    raw_train_data = raw_train_data.select(range(min(10000, len(raw_train_data))))
+    
+    class SamplePredictionCallback(TrainerCallback):
+        def __init__(self, tokenizer, raw_data, device_map="auto"):
+            self.tokenizer = tokenizer
+            self.raw_data = raw_data
+            self.device_map = device_map
+            self.sample_index = random.randint(0, len(raw_data) - 1)
+        
+        def on_evaluate(self, args, state, control, model=None, **kwargs):
+            if args.local_rank not in [-1, 0]:
+                return
+            sample_data = self.raw_data[self.sample_index]
+            input_text = generate_prompt({
+                "instruction": sample_data["instruction"],
+                "input": sample_data["input"],
+                "output": ""
+            })
+            inputs = self.tokenizer(input_text, return_tensors="pt", truncation=True, max_length=cutoff_len)
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=64,
+                    num_return_sequences=1,
+                    temperature=0.7,
+                    top_p=0.9,
+                    eos_token_id=tokenizer.eos_token_id,
+                    pad_token_id=tokenizer.pad_token_id
+                )
+            prediction = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            if "### Response:" in prediction:
+                prediction = prediction.split("### Response:")[-1].strip()
+            print("\n" + "="*80)
+            print(f"Epoch {state.epoch} - Sample Prediction")
+            print("="*80)
+            print(f"Instruction: {sample_data['instruction']}")
+            print(f"Input: {sample_data['input'][:200]}...") 
+            print(f"Actual Output: {sample_data['output']}")
+            print(f"Predicted Output: {prediction}")
+            print("="*80 + "\n")
+            self.sample_index = random.randint(0, len(self.raw_data) - 1)
+
     if resume_from_checkpoint:
         # Check the available weights and load them
         checkpoint_name = os.path.join(
@@ -203,6 +258,9 @@ def train(
     if not ddp and torch.cuda.device_count() > 1:
         model.is_parallelizable = True
         model.model_parallel = True
+
+    early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=10)
+    prediction_callback = SamplePredictionCallback(tokenizer, raw_train_data, device_map)
 
     trainer = transformers.Trainer(
         model=model,
@@ -230,7 +288,7 @@ def train(
         data_collator=transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
         ),
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=5)]
+        callbacks=[early_stopping_callback, prediction_callback]
     )
     model.config.use_cache = False
     old_state_dict = model.state_dict

@@ -7,9 +7,9 @@ python download_base_models.py
 
 ## Game datasets   
 You can download the datasets from
-![meta_Video_Games.json](https://www.kaggle.com/datasets/khaledsayed111/meta-video-games)
-![Video_Games_5.json](https://www.kaggle.com/code/idrimadrid/projet-text-mining-amazon-reviews/output)
-![id2name.txt](https://github.com/SAI990323/BIGRec/blob/main/data/game/id2name.txt)
+[meta_Video_Games.json](https://www.kaggle.com/datasets/khaledsayed111/meta-video-games)
+[Video_Games_5.json](https://www.kaggle.com/code/idrimadrid/projet-text-mining-amazon-reviews/output)
+[id2name.txt](https://github.com/SAI990323/BIGRec/blob/main/data/game/id2name.txt)
 
 ```
 cd data/game  
@@ -31,8 +31,8 @@ python data/game/evaluate.py --input_dir data/game/result
 ```    
 ## Movie datasets   
 You can download the datasets from
-![movies.dat](https://grouplens.org/datasets/movielens/10m/)
-![rating.dat](https://grouplens.org/datasets/movielens/10m/)
+[movies.dat](https://grouplens.org/datasets/movielens/10m/)
+[rating.dat](https://grouplens.org/datasets/movielens/10m/)
 ```
 cd data/movie   
 python process.py
