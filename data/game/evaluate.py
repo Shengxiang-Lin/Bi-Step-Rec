@@ -60,10 +60,23 @@ for p in path:
     import json
     test_data = json.load(f)
     f.close()
-    #text = [_["predict"][0].strip("\"") for _ in test_data]
-    #text = [_["predict"][0].strip("\"") for _ in test_data if _["predict"] is not None]
-    filtered_test_data = [_ for _ in test_data if _["predict"] is not None]
-    text = [_["predict"][0].strip("\"") for _ in filtered_test_data]
+    filtered_test_data = []
+    text = []
+    for data in test_data:
+        if data["predict"] is None:
+            continue
+        if isinstance(data["predict"], str):
+            cleaned = data["predict"].strip().strip('"')
+            if cleaned:  # 检查是否非空
+                text.append(cleaned)
+                filtered_test_data.append(data)
+        elif isinstance(data["predict"], list) and len(data["predict"]) > 0:
+            first_pred = data["predict"][0]
+            if isinstance(first_pred, str):
+                cleaned = first_pred.strip().strip('"')
+                if cleaned: 
+                    text.append(cleaned)
+                    filtered_test_data.append(data)
     tokenizer.padding_side = "left"
     test_data = filtered_test_data
     def batch(list, batch_size=1):

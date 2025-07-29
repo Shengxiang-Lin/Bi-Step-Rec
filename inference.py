@@ -1,5 +1,6 @@
 import sys
 import fire
+import gradio as gr
 import torch
 torch.set_num_threads(1)
 import transformers
@@ -7,21 +8,19 @@ import json
 import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-import re
-from transformers.utils import logging
-logging.set_verbosity_error()
-
 from peft import PeftModel
-from transformers import GenerationConfig, LlamaTokenizer, LlamaForCausalLM
-from tqdm import tqdm
+from transformers import GenerationConfig,  LlamaTokenizer
+from transformers import LlamaForCausalLM
 
 if torch.cuda.is_available():
     device = "cuda"
-elif torch.backends.mps.is_available():
-    device = "mps"
 else:
     device = "cpu"
+try:
+    if torch.backends.mps.is_available():
+        device = "mps"
+except:  # noqa: E722
+    pass
 
 def main(
     load_8bit: bool = False,
@@ -29,12 +28,12 @@ def main(
     lora_weights: str = "lora-alpaca-game/checkpoint-40",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
     result_json_data: str = "data/game/result/game.json",
-    batch_size: int = 8,
+    batch_size: int=16,
 ):
-    assert base_model, "Please specify a --base_model"
-
+    assert (
+        base_model
+    ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
     tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
-
     if device == "cuda":
         model = LlamaForCausalLM.from_pretrained(
             base_model,
@@ -72,93 +71,78 @@ def main(
         )
 
     tokenizer.padding_side = "left"
-    tokenizer.pad_token_id = 0  # unk token
-    model.config.pad_token_id = tokenizer.pad_token_id
+    # unwind broken decapoda-research config
+    model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
     model.config.bos_token_id = 1
     model.config.eos_token_id = 2
-
     if not load_8bit:
-        model.half()
+        model.half()  # seems to fix bugs for some users.
     model.eval()
-
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
 
     def evaluate(
         instructions,
         inputs=None,
-        temperature=0.7,
+        temperature=0,
         top_p=0.9,
-        top_k=50,
-        num_beams=1,
-        max_new_tokens=128,
+        top_k=40,
+        num_beams=4,
+        do_sample=False,
+        max_new_tokens=32,
         **kwargs,
     ):
-        prompts = [generate_prompt(inst, inp) for inst, inp in zip(instructions, inputs)]
-        encoded_inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
-
+        prompt = [generate_prompt(instruction, input) for instruction, input in zip(instructions, inputs)]
+        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(device)
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
             num_beams=num_beams,
-            do_sample=True if temperature > 0 else False,
+            do_sample=do_sample,
+            num_return_sequences=num_beams,
             **kwargs,
         )
-
         with torch.no_grad():
-            outputs = model.generate(
-                **encoded_inputs,
+            generation_output = model.generate(
+                **inputs,
                 generation_config=generation_config,
+                return_dict_in_generate=True,
+                output_scores=True,
                 max_new_tokens=max_new_tokens,
-                return_dict_in_generate=False,
-                eos_token_id=tokenizer.eos_token_id,
-                pad_token_id=tokenizer.pad_token_id,
             )
-        decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        cleaned = [out.split("### Response:\n")[-1].strip() for out in decoded]
+        s = generation_output.sequences
+        output = tokenizer.batch_decode(s, skip_special_tokens=True)
+        output = [_.split('Response:\n')[-1] for _ in output]
+        real_outputs = [output[i * num_beams: (i + 1) * num_beams] for i in range(len(output) // num_beams)]
+        return real_outputs
 
-        def extract_response(text):
-            quoted_match = re.search(r'"([^"]+)"', text)
-            if quoted_match:
-                return f'"{quoted_match.group(1)}"'
-            unquoted_match = re.search(r'([A-Z][a-zA-Z0-9 :\-\',&]+\(\d{4}\))', text)
-            if unquoted_match:
-                return f'"{unquoted_match.group(0)}"'
-            title_match = re.search(r'([A-Z][a-zA-Z0-9 :\-\',&]+)', text)
-            if title_match:
-                return f'"{title_match.group(0)}"'
-            cleaned_text = ' '.join(text.split())
-            return f'"{cleaned_text[:100]}..."' if len(cleaned_text) > 100 else f'"{cleaned_text}"'
-        
-        predicted_response = [extract_response(text) for text in cleaned]
-        return predicted_response
-
+    outputs = []
+    from tqdm import tqdm
     with open(test_data_path, 'r') as f:
         test_data = json.load(f)
+        instructions = [_['instruction'] for _ in test_data]
+        inputs = [_['input'] for _ in test_data]
+        def batch(list, batch_size=batch_size):
+            chunk_size = (len(list) - 1) // batch_size + 1
+            for i in range(chunk_size):
+                yield list[batch_size * i: batch_size * (i + 1)]
+        for i, batch in tqdm(enumerate(zip(batch(instructions), batch(inputs)))):
+            instructions, inputs = batch
+            output = evaluate(instructions, inputs)
+            outputs = outputs + output          
+        for i, test in tqdm(enumerate(test_data)):
+            test_data[i]['predict'] = outputs[i]
 
-    instructions = [item['instruction'] for item in test_data]
-    inputs = [item['input'] for item in test_data]
-    outputs = []
-
-    with tqdm(total=len(instructions), desc="Generating") as pbar:
-        for i in range(0, len(instructions), batch_size):
-            batch_instructions = instructions[i:i+batch_size]
-            batch_inputs = inputs[i:i+batch_size]
-            batch_outputs = evaluate(batch_instructions, batch_inputs)
-            outputs.extend(batch_outputs)
-            pbar.update(len(batch_instructions))
-
-    for i, item in enumerate(test_data):
-        item['predict'] = outputs[i]
-
-    os.makedirs(os.path.dirname(result_json_data), exist_ok=True)
+    result_dir = os.path.dirname(result_json_data)
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir, exist_ok=True)
     with open(result_json_data, 'w') as f:
         json.dump(test_data, f, indent=4)
 
 def generate_prompt(instruction, input=None):
     if input:
-        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.  
 
 ### Instruction:
 {instruction}
@@ -168,7 +152,7 @@ def generate_prompt(instruction, input=None):
 
 ### Response:"""
     else:
-        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
+        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
 
 ### Instruction:
 {instruction}
