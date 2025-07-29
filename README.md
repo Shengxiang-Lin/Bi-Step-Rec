@@ -37,12 +37,10 @@ python inference.py --lora_weights lora-alpaca-movie/checkpoint-40 --test_data_p
 #train with Deepspeed
 python -m accelerate.commands.launch inference.py --lora_weights lora-alpaca-movie/checkpoint-40 --test_data_path data/movie/dataset/processed/test_5000.json result_json_data data/movie/result/movie.json
 ```
-
 ### Train and inference together (Take movie as an example)     
 ```
 python train-inference.py --train_data_path '["data/movie/dataset/processed/train.json"]' --val_data_path '["data/movie/dataset/processed/valid_5000.json"]' --val_test_path '["data/movie/dataset/processed/test_5000.json"]' --output_dir ./lora-alpaca-movie
 ```
-
 ### Evaluate (Take movie as an example)       
 ```
 python data/movie/evaluate.py --input_dir data/movie/result    
@@ -73,6 +71,7 @@ Current working directory/
 ├─ lora-alpaca-movie/
 ├─ README.md
 ├─ requirements.txt
+|- download_base_models.py
 ├─ train.py
 ├─ train-inference.py
 └─ inference.py
