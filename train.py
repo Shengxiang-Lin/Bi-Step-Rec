@@ -13,6 +13,7 @@ import transformers
 from typing import List
 from datasets import load_dataset, concatenate_datasets
 from transformers import (
+    AutoTokenizer, 
     EarlyStoppingCallback,
     TrainerCallback,
     LlamaForCausalLM,
@@ -20,7 +21,7 @@ from transformers import (
     TrainingArguments,
     DataCollatorForSeq2Seq,
     TrainerState, 
-    TrainerControl
+    TrainerControl,
 )
 from peft import (
     LoraConfig,
@@ -137,11 +138,11 @@ class SavePeftModelCallback(TrainerCallback):
         return control
 
 def train(
-    base_model: str = "base_models/llama-7b",
+    base_model: str = "base_models/Qwen2-0.5B",
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./lora-alpaca-game",
+    output_dir: str = "./Qwen2-0.5B-lora-alpaca-game",
     sample: int = 1024,
     seed: int = 0,
     batch_size: int = 128,
@@ -211,10 +212,10 @@ def train(
         device_map=device_map,
         local_files_only=True
     )
-    tokenizer = LlamaTokenizer.from_pretrained(
-        base_model, 
-        local_files_only=True
-    )
+    #train with llama-7b
+    #tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
+    #trained with qwen2-0.5b
+    tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True)
     tokenizer.pad_token_id = 0
     tokenizer.padding_side = "left"
     def tokenize(prompt, add_eos_token=True):
