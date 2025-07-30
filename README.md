@@ -9,6 +9,8 @@ cd bitsandbytes
 export CUDA_VERSION=121
 cd ..
 ```
+#### [Deepspeed Configuration](https://github.com/Shengxiang-Lin/Post-Training-of-LLMs/tree/main/Deepspeed_example)  
+It is not necessary here, but Deepspeed can greatly accelerate training.
 ### Download the base_models 
 ```
 python download_base_models.py
