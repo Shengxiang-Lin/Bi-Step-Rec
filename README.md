@@ -7,6 +7,7 @@ pip install -r requirements.txt
 git clone https://github.com/TimDettmers/bitsandbytes.git
 cd bitsandbytes
 export CUDA_VERSION=121
+python setup.py install
 cd ..
 ```
 #### [Deepspeed Configuration](https://github.com/Shengxiang-Lin/Post-Training-of-LLMs/tree/main/Deepspeed_example)  
