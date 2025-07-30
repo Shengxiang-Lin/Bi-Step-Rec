@@ -4,6 +4,7 @@
 conda create -n BIGRec python=3.10
 conda activate BIGRec
 pip install -r requirements.txt
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 git clone https://github.com/TimDettmers/bitsandbytes.git
 cd bitsandbytes
 export CUDA_VERSION=121
