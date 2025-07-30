@@ -41,5 +41,5 @@ for i, batch_input in tqdm(enumerate(batch(text, 16))):
 
 item_embedding = torch.cat(item_embedding, dim=0)
 os.makedirs('dataset/embedding', exist_ok=True)
-torch.save(item_embedding, 'dataset/embedding/item_embedding.pt')
+torch.save(item_embedding, 'dataset/embedding/item_embedding-llama-7b.pt')
 print(item_embedding.shape)

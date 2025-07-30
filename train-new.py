@@ -39,12 +39,10 @@ def setup_logging(output_dir, model_type):
     # 创建logs目录
     logs_dir = os.path.join(output_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
-    
     # 生成基于时间的日志文件名
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"{model_type}_training_{timestamp}.log"
     log_filepath = os.path.join(logs_dir, log_filename)
-    
     # 配置日志
     logging.basicConfig(
         level=logging.INFO,
@@ -54,7 +52,6 @@ def setup_logging(output_dir, model_type):
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
     return log_filepath
 
 # 通用模板生成函数，兼容不同模型
@@ -62,7 +59,6 @@ def generate_prompt(data_point: Dict[str, Any], model_type: str = "llama") -> st
     instruction = data_point.get("instruction", "")
     input_text = data_point.get("input", "")
     output = data_point.get("output", "")
-    
     # 特殊处理Qwen2的模板
     if model_type == "qwen":
         if input_text:
@@ -81,7 +77,6 @@ You are a helpful AI assistant.<|im_end|>
 {instruction}<|im_end|>
 <|im_start|>assistant
 {output}<|im_end|>"""
-    
     # 默认Alpaca格式
     if input_text:
         return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
@@ -107,7 +102,6 @@ You are a helpful AI assistant.<|im_end|>
 def generate_prediction_prompt(data_point: Dict[str, Any], model_type: str = "llama") -> str:
     instruction = data_point.get("instruction", "")
     input_text = data_point.get("input", "")
-    
     if model_type == "qwen":
         if input_text:
             return f"""<|im_start|>system
@@ -174,7 +168,7 @@ class SamplePredictionCallback(TrainerCallback):
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=128,
+                max_new_tokens=32,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
@@ -185,7 +179,7 @@ class SamplePredictionCallback(TrainerCallback):
             )
         
         decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
-        
+
         # 特殊处理Qwen2的输出格式
         if self.model_type == "qwen":
             if "<|im_start|>assistant" in decoded_output:
@@ -245,12 +239,12 @@ def train(
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./Qwen2-0.5B-lora-alpaca-game",
-    sample: int = 1024,
+    output_dir: str = "./llama-7b-lora-alpaca-game-0",
+    sample: int = 4096,
     seed: int = 0,
     batch_size: int = 128,
     micro_batch_size: int = 8,
-    num_epochs: int = 5,
+    num_epochs: int = 10,
     learning_rate: float = 1e-4,
     cutoff_len: int = 1024,
     lora_r: int = 8,

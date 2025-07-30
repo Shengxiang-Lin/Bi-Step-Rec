@@ -47,5 +47,5 @@ for i, batch_input in tqdm(enumerate(batch(text, 16))):
 
 item_embedding = torch.cat(item_embedding, dim=0)
 os.makedirs('dataset/embedding', exist_ok=True)
-torch.save(item_embedding, 'dataset/embedding/movie_embedding.pt')
+torch.save(item_embedding, 'dataset/embedding/movie_embedding-llama-7b.pt')
 print(f"Shape of the generated embedding matrix: {item_embedding.shape}")
