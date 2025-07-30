@@ -1,5 +1,14 @@
-# BIGRec
-
+# BIGRec   
+### Environment Configuration
+```
+conda create -n BIGRec python=3.10
+conda activate BIGRec
+pip install -r requirements.txt
+git clone https://github.com/TimDettmers/bitsandbytes.git
+cd bitsandbytes
+export CUDA_VERSION=121
+cd ..
+```
 ### Download the base_models 
 ```
 python download_base_models.py
