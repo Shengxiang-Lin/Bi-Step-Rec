@@ -1,4 +1,4 @@
-from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
+from transformers import GenerationConfig, AutoModelForCausalLM, AutoTokenizer
 import torch
 import os
 import math
@@ -15,14 +15,35 @@ for root, dirs, files in os.walk(args.input_dir):
         if name.endswith(".json"):
             path.append(os.path.join(root, name))
 print(f"{path}")
-base_model = "/home/lsx/code/BIGRec/base_models/llama-7b"
-tokenizer = LlamaTokenizer.from_pretrained(base_model)
-model = LlamaForCausalLM.from_pretrained(
+#base_model = "base_models/Qwen2.5-0.5B"
+base_model = "base_models/llama-7b"
+# ====== 主要修改部分 ======
+# 自动识别模型类型并加载合适的分词器和模型
+if "qwen" in base_model.lower():
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model, 
+        trust_remote_code=True,
+        pad_token='<|endoftext|>' if "qwen" in base_model.lower() else None
+    )
+else:  # Llama模型
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+
+# 特殊处理Qwen的pad token
+if tokenizer.pad_token is None:
+    if hasattr(tokenizer, 'eod_id'):  # Qwen的特殊字段
+        tokenizer.pad_token = tokenizer.eod
+    else:
+        tokenizer.pad_token = tokenizer.eos_token
+
+model = AutoModelForCausalLM.from_pretrained(
     base_model,
     torch_dtype=torch.float16,
     device_map="auto",
-    local_files_only=True
+    local_files_only=True,
+    trust_remote_code=True if "qwen" in base_model.lower() else None
 )
+# ====== 修改结束 ======
+
 device = model.device
 print(f"Using device: {device}")
 
@@ -39,7 +60,10 @@ for i in range(len(item_names)):
         item_dict[item_names[i]].append(item_ids[i])
 result_dict = dict()
 
-movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding.pt')
+if "qwen" in base_model.lower():
+    movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding-Qwen2.5-0.5B.pt')
+else:
+    movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding-llama-7b.pt')
 movie_embedding = torch.load(movie_embedding_path, weights_only=True).to(device)
 num_items = movie_embedding.size(0) 
 print(f"Loaded movie embeddings with shape: {movie_embedding.shape}")
@@ -48,13 +72,19 @@ import pandas as pd
 for p in path:
     if p.endswith("_evaluation.json"):
         continue
+    if "llama" in base_model.lower() and "qwen" in p.lower():
+        print(f"Skipping Qwen file for Llama model: {p}")
+        continue
+    if "qwen" in base_model.lower() and "llama" in p.lower():
+        print(f"Skipping Llama file for Qwen model: {p}")
+        continue
     result_dict[p] = {
         "NDCG": [],
         "HR": [],
     }
-    model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-    model.config.bos_token_id = 1
-    model.config.eos_token_id = 2
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.bos_token_id = tokenizer.bos_token_id
+    model.config.eos_token_id = tokenizer.eos_token_id
     model.eval()
     f = open(p, 'r')
     import json

@@ -241,20 +241,20 @@ class SavePeftModelCallback(TrainerCallback):
         return control
 
 def train(
-    base_model: str = "base_models/llama-7b",
+    base_model: str = "base_models/Qwen2.5-0.5B",
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./llama-7b-lora-alpaca-game-2",
+    output_dir: str = "./Qwen2.5-0.5B-lora-alpaca-game-2",
     sample: int = 1024,
-    seed: int = 2,
+    seed: int = 1,
     batch_size: int = 128,
     micro_batch_size: int = 8,
     num_epochs: int = 50,
     learning_rate: float = 1e-4,
     cutoff_len: int = 1024,
-    lora_r: int = 8,
-    lora_alpha: int = 16,
+    lora_r: int = 32,
+    lora_alpha: int = 32,
     lora_dropout: float = 0.05,
     lora_target_modules: List[str] = ["q_proj", "v_proj"],
     train_on_inputs: bool = False,
@@ -498,7 +498,7 @@ def train(
         logging.info(f"Using model parallel on {torch.cuda.device_count()} GPUs")
 
     # 训练回调函数
-    early_stopping = EarlyStoppingCallback(early_stopping_patience=5)
+    early_stopping = EarlyStoppingCallback(early_stopping_patience=15)
     sample_prediction = SamplePredictionCallback(
         tokenizer=tokenizer,
         raw_data=raw_test_data,

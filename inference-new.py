@@ -23,10 +23,10 @@ except:  # noqa: E722
 
 def main(
     load_8bit: bool = False,
-    base_model: str = "base_models/llama-7b",
-    lora_weights: str = "llama-7b-lora-alpaca-game-2/checkpoint-112",
+    base_model: str = "base_models/Qwen2.5-0.5B",
+    lora_weights: str = "Qwen2.5-0.5B-lora-alpaca-game-2/checkpoint-264",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/num_beams/llama-7b-lora-alpaca-game-2.json",
+    result_json_data: str = "data/game/result/temperature/Qwen2.5-0.5B-lora-alpaca-game-2-264.json",
     batch_size: int = 16,
     model_type: str = "auto",  # auto/llama/qwen
 ):
@@ -129,11 +129,11 @@ def main(
     def evaluate(
         instructions,
         inputs=None,
-        temperature=0,
+        temperature=0.15,
         top_p=0.9,
         top_k=40,
-        num_beams=4,
-        do_sample=False,
+        num_beams=1,
+        do_sample=True,
         max_new_tokens=32,
         **kwargs,
     ):
@@ -193,8 +193,6 @@ You are a helpful AI assistant.<|im_end|>
             num_beams=num_beams,
             do_sample=do_sample,
             num_return_sequences=num_beams,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id,
             **kwargs,
         )
         
@@ -205,17 +203,18 @@ You are a helpful AI assistant.<|im_end|>
                 return_dict_in_generate=True,
                 output_scores=True,
                 max_new_tokens=max_new_tokens,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id
             )
         
         s = generation_output.sequences
-        outputs = tokenizer.batch_decode(s, skip_special_tokens=False)
-        
+        outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
         # 根据模型类型提取响应
         real_outputs = []
         for output in outputs:
             if model_type == "qwen":
-                if "<|im_start|>assistant" in output:
-                    response = output.split("<|im_start|>assistant")[-1]
+                if "assistant" in output:
+                    response = output.split("assistant")[-1]
                     if "<|im_end|>" in response:
                         response = response.split("<|im_end|>")[0].strip()
                     else:
