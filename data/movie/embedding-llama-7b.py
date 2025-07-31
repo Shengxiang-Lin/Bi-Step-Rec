@@ -26,7 +26,6 @@ with open('dataset/movies.dat', 'r', encoding='ISO-8859-1') as f:
             continue
         movie_title = parts[1].strip()
         text.append(movie_title)
-
 tokenizer.padding_side = "left"
 
 from tqdm import tqdm
