@@ -12,7 +12,7 @@ from peft import PeftModel
 from transformers import GenerationConfig, AutoTokenizer, AutoModelForCausalLM
 
 if torch.cuda.is_available():
-    device = "cuda:0"
+    device = "cuda"
 else:
     device = "cpu"
 try:
@@ -23,11 +23,11 @@ except:  # noqa: E722
 
 def main(
     load_8bit: bool = False,
-    base_model: str = "base_models/Qwen2-0.5B",
-    lora_weights: str = "Qwen2-0.5B-lora-alpaca-game/checkpoint-80",
+    base_model: str = "base_models/llama-7b",
+    lora_weights: str = "llama-7b-lora-alpaca-game-2/checkpoint-112",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/game.json",
-    batch_size: int = 32,
+    result_json_data: str = "data/game/result/num_beams/llama-7b-lora-alpaca-game-2.json",
+    batch_size: int = 16,
     model_type: str = "auto",  # auto/llama/qwen
 ):
     assert (
