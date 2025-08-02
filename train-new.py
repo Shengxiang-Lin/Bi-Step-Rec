@@ -111,7 +111,7 @@ def generate_prediction_prompt(data_point: Dict[str, Any], model_type: str = "ll
     if model_type == "qwen":
         if input_text:
             return f"""<|im_start|>system
-You are a helpful AI assistant.<|im_end|>
+You are a helpful assistant.<|im_end|>
 <|im_start|>user
 {instruction}
 
@@ -120,7 +120,7 @@ You are a helpful AI assistant.<|im_end|>
 """
         else:
             return f"""<|im_start|>system
-You are a helpful AI assistant.<|im_end|>
+You are a helpful assistant.<|im_end|>
 <|im_start|>user
 {instruction}<|im_end|>
 <|im_start|>assistant
@@ -181,18 +181,19 @@ class SamplePredictionCallback(TrainerCallback):
                 num_beams=1,
                 num_return_sequences=1,
                 eos_token_id=self.tokenizer.eos_token_id,
-                pad_token_id=self.tokenizer.pad_token_id
+                pad_token_id=self.tokenizer.pad_token_id,
+                early_stopping=True
             )
-        
-        decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
         
         # 特殊处理Qwen2的输出格式
         if self.model_type == "qwen":
-            if "<|im_start|>assistant" in decoded_output:
-                predicted_output = decoded_output.split("<|im_start|>assistant")[-1]
+            decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
+            if "assistant" in decoded_output:
+                predicted_output = decoded_output.split("assistant")[-1]
                 if "<|im_end|>" in predicted_output:
                     predicted_output = predicted_output.split("<|im_end|>")[0].strip()
         else:
+            decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             if "### Response:" in decoded_output:
                 predicted_output = decoded_output.split("### Response:")[-1].strip()
                 if "###" in predicted_output:
@@ -241,20 +242,20 @@ class SavePeftModelCallback(TrainerCallback):
         return control
 
 def train(
-    base_model: str = "base_models/Qwen2.5-0.5B",
+    base_model: str = "base_models/llama-7b",
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./Qwen2.5-0.5B-lora-alpaca-game-2",
+    output_dir: str = "./llama-7b-lora-alpaca-game-base-0",
     sample: int = 1024,
-    seed: int = 1,
+    seed: int = 0,
     batch_size: int = 128,
     micro_batch_size: int = 8,
-    num_epochs: int = 50,
+    num_epochs: int = 5,
     learning_rate: float = 1e-4,
     cutoff_len: int = 1024,
-    lora_r: int = 32,
-    lora_alpha: int = 32,
+    lora_r: int = 8,
+    lora_alpha: int = 16,
     lora_dropout: float = 0.05,
     lora_target_modules: List[str] = ["q_proj", "v_proj"],
     train_on_inputs: bool = False,
@@ -384,7 +385,7 @@ def train(
     if model_type == "qwen":
         tokenizer.eos_token = "<|im_end|>"
         tokenizer.bos_token = "<|im_start|>"
-        tokenizer.pad_token = "<|endoftext|>"
+        tokenizer.pad_token = tokenizer.eos_token
     
     logging.info(f"Tokenizer settings - pad_token: {tokenizer.pad_token}, eos_token: {tokenizer.eos_token}, padding_side: {tokenizer.padding_side}")
     

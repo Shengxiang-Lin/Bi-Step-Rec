@@ -23,10 +23,10 @@ except:  # noqa: E722
 
 def main(
     load_8bit: bool = False,
-    base_model: str = "base_models/Qwen2.5-0.5B",
-    lora_weights: str = "Qwen2.5-0.5B-lora-alpaca-game-2/checkpoint-264",
+    base_model: str = "base_models/llama-7b",
+    lora_weights: str = "llama-7b-lora-alpaca-game-base-0/checkpoint-40",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/temperature/Qwen2.5-0.5B-lora-alpaca-game-2-264.json",
+    result_json_data: str = "data/game/result/base/llama-7b-7B-lora-alpaca-game-base-0-40.json",
     batch_size: int = 16,
     model_type: str = "auto",  # auto/llama/qwen
 ):
@@ -80,7 +80,8 @@ def main(
             model,
             lora_weights,
             torch_dtype=torch.float16,
-            device_map="auto"
+            device_map="auto",
+            local_files_only=True
         )
     elif device == "mps":
         model = AutoModelForCausalLM.from_pretrained(
@@ -129,7 +130,7 @@ def main(
     def evaluate(
         instructions,
         inputs=None,
-        temperature=0.15,
+        temperature=0.2,
         top_p=0.9,
         top_k=40,
         num_beams=1,
@@ -208,6 +209,7 @@ You are a helpful AI assistant.<|im_end|>
             )
         
         s = generation_output.sequences
+
         outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
         # 根据模型类型提取响应
         real_outputs = []

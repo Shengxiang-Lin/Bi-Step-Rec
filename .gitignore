@@ -16,3 +16,7 @@ results_medium/
 data/game/dataset/
 data/movie/dataset/
 data/game/result/useless
+data/game/embed/output
+data/game/embed/output/item_embedding-llama-7b-base.pt
+data/game/embed/output/item_embedding-llama-7b-keywords.pt
+data/game/embed/output/item_embedding-llama-7b-merged.pt

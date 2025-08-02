@@ -3,7 +3,7 @@ import torch
 import os
 import math
 import json
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import argparse
 parse = argparse.ArgumentParser()
 parse.add_argument("--input_dir",type=str, default="./", help="your model directory")
@@ -15,7 +15,7 @@ for root, dirs, files in os.walk(args.input_dir):
         if name.endswith(".json"):
             path.append(os.path.join(root, name))
 print(f"{path}")
-#base_model = "base_models/Qwen2.5-0.5B"
+#base_model = "base_models/Qwen2.5-7B"
 base_model = "base_models/llama-7b"
 # ====== 主要修改部分 ======
 # 自动识别模型类型并加载合适的分词器和模型
@@ -61,9 +61,9 @@ for i in range(len(item_names)):
 result_dict = dict()
 
 if "qwen" in base_model.lower():
-    movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding-Qwen2.5-0.5B.pt')
+    movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding-Qwen2.5-7B.pt')
 else:
-    movie_embedding_path = os.path.join(script_dir, 'dataset/embedding/item_embedding-llama-7b.pt')
+    movie_embedding_path = os.path.join(script_dir, 'embed/item_embedding-llama-7b-base.pt')
 movie_embedding = torch.load(movie_embedding_path, weights_only=True).to(device)
 num_items = movie_embedding.size(0) 
 print(f"Loaded movie embeddings with shape: {movie_embedding.shape}")
@@ -115,7 +115,7 @@ for p in path:
             yield list[batch_size * i: batch_size * (i + 1)]
     predict_embeddings = []
     from tqdm import tqdm
-    for batch_input in tqdm(batch(text, 8), total=len(text)//8+1):
+    for batch_input in tqdm(batch(text, 4), total=len(text)//4+1):
         inputs = tokenizer(
             batch_input, 
             return_tensors="pt", 
@@ -169,5 +169,5 @@ for p in path:
     result_dict[p]["NDCG"] = NDCG
     result_dict[p]["HR"] = HR
 
-f = open('data/game/result/game_evaluation.json', 'w')    
+f = open('data/game/result/base/game-base_evaluation.json', 'w')    
 json.dump(result_dict, f, indent=4)

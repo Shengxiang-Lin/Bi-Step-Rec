@@ -138,11 +138,11 @@ class SavePeftModelCallback(TrainerCallback):
         return control
 
 def train(
-    base_model: str = "base_models/Qwen2-0.5B",
+    base_model: str = "base_models/llama-7b",
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./Qwen2-0.5B-lora-alpaca-game",
+    output_dir: str = "./llama-7b-lora-alpaca-game",
     sample: int = 1024,
     seed: int = 0,
     batch_size: int = 128,
@@ -213,9 +213,9 @@ def train(
         local_files_only=True
     )
     #train with llama-7b
-    #tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
+    tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
     #trained with qwen2-0.5b
-    tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True)
+    #tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True)
     tokenizer.pad_token_id = 0
     tokenizer.padding_side = "left"
     def tokenize(prompt, add_eos_token=True):
