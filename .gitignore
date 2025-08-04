@@ -20,3 +20,11 @@ data/game/embed/output
 data/game/embed/output/item_embedding-llama-7b-base.pt
 data/game/embed/output/item_embedding-llama-7b-keywords.pt
 data/game/embed/output/item_embedding-llama-7b-merged.pt
+cache/
+Qwen2.5-7B-lora-alpaca-game-0/
+llama-7b-lora-alpaca-game-base-0/
+llama-7b-grpo-recommender/
+trl/
+data/game/result/
+data/movie/result/
+data/game/embed/
