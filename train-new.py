@@ -63,14 +63,15 @@ def generate_prompt(data_point: Dict[str, Any], model_type: str = "llama") -> st
     input_text = data_point.get("input", "")
     output = data_point.get("output", "")
     
-    # 特殊处理Qwen2的模板
+    # 特殊处理Qwen的模板
     if model_type == "qwen":
         if input_text:
             return f"""<|im_start|>system
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
 {instruction}
-
+Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 {input_text}<|im_end|>
 <|im_start|>assistant
 {output}<|im_end|>"""
@@ -78,17 +79,18 @@ You are a helpful AI assistant.<|im_end|>
             return f"""<|im_start|>system
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
-{instruction}<|im_end|>
+{instruction}Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 <|im_start|>assistant
 {output}<|im_end|>"""
     
-    # 默认Alpaca格式
+    # 默认Alpaca格式（Llama兼容）
     if input_text:
         return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Input:
 {input_text}
 
@@ -99,7 +101,7 @@ You are a helpful AI assistant.<|im_end|>
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Response:
 {output}"""
 
@@ -114,7 +116,8 @@ def generate_prediction_prompt(data_point: Dict[str, Any], model_type: str = "ll
 You are a helpful assistant.<|im_end|>
 <|im_start|>user
 {instruction}
-
+Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 {input_text}<|im_end|>
 <|im_start|>assistant
 """
@@ -122,17 +125,18 @@ You are a helpful assistant.<|im_end|>
             return f"""<|im_start|>system
 You are a helpful assistant.<|im_end|>
 <|im_start|>user
-{instruction}<|im_end|>
+{instruction}Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 <|im_start|>assistant
 """
     
-    # 默认Alpaca格式
+    # 默认Alpaca格式（Llama兼容）
     if input_text:
         return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Input:
 {input_text}
 
@@ -142,7 +146,7 @@ You are a helpful assistant.<|im_end|>
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Response:"""
 
 class SamplePredictionCallback(TrainerCallback):
@@ -185,14 +189,17 @@ class SamplePredictionCallback(TrainerCallback):
                 early_stopping=True
             )
         
-        # 特殊处理Qwen2的输出格式
+        # 特殊处理Qwen的输出格式
         if self.model_type == "qwen":
             decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
             if "assistant" in decoded_output:
                 predicted_output = decoded_output.split("assistant")[-1]
                 if "<|im_end|>" in predicted_output:
                     predicted_output = predicted_output.split("<|im_end|>")[0].strip()
+                if "<|endoftext|>" in predicted_output:
+                    predicted_output = predicted_output.split("<|endoftext|>")[0].strip()
         else:
+            # Llama兼容处理
             decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             if "### Response:" in decoded_output:
                 predicted_output = decoded_output.split("### Response:")[-1].strip()
@@ -242,16 +249,16 @@ class SavePeftModelCallback(TrainerCallback):
         return control
 
 def train(
-    base_model: str = "base_models/llama-7b",
+    base_model: str = "base_models/Qwen2.5-3B-Instruct",
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
     val_test_path: List[str] = ["data/game/dataset/processed/test_5000.json"],
-    output_dir: str = "./llama-7b-lora-alpaca-game-base-0",
+    output_dir: str = "./Qwen2.5-3B-Instruct-game-base-0",
     sample: int = 1024,
     seed: int = 0,
     batch_size: int = 128,
     micro_batch_size: int = 8,
-    num_epochs: int = 5,
+    num_epochs: int = 10,
     learning_rate: float = 1e-4,
     cutoff_len: int = 1024,
     lora_r: int = 8,
@@ -381,7 +388,7 @@ def train(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     
-    # Qwen2需要设置特殊token
+    # Qwen需要设置特殊token
     if model_type == "qwen":
         tokenizer.eos_token = "<|im_end|>"
         tokenizer.bos_token = "<|im_start|>"
@@ -521,7 +528,7 @@ def train(
         eval_strategy="epoch",
         save_strategy="epoch",
         output_dir=output_dir,
-        save_total_limit=3,
+        save_total_limit=10,
         load_best_model_at_end=True,
         ddp_find_unused_parameters=False if ddp else None,
         group_by_length=group_by_length,
@@ -564,8 +571,9 @@ def train(
     print(f"\nTraining complete. Final model saved to: {output_dir}")
     
     # 记录训练结束时间
-    logging.info(f"Training finished at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logging.info(f"Total training time: {datetime.datetime.now() - start_time}")
+    end_time = datetime.datetime.now()
+    logging.info(f"Training finished at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logging.info(f"Total training time: {end_time - start_time}")
 
 if __name__ == "__main__":
     # 记录全局开始时间

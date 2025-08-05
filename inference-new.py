@@ -9,7 +9,7 @@ import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 from peft import PeftModel
-from transformers import GenerationConfig, AutoTokenizer, AutoModelForCausalLM
+from transformers import GenerationConfig, AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -23,17 +23,17 @@ except:  # noqa: E722
 
 def main(
     load_8bit: bool = False,
-    base_model: str = "base_models/llama-7b",
-    lora_weights: str = "llama-7b-lora-alpaca-game-base-0/checkpoint-40",
+    base_model: str = "base_models/Qwen2.5-3B-Instruct",
+    lora_weights: str = "Qwen2.5-3B-Instruct-game-base-0/checkpoint-72",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/base/llama-7b-7B-lora-alpaca-game-base-0-40.json",
-    batch_size: int = 16,
+    result_json_data: str = "data/game/result/qwen/Qwen2.5-3B-Instruct-game-base-0-72.json",
+    batch_size: int = 32,
     model_type: str = "auto",  # auto/llama/qwen
 ):
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='base_models/llama-7b'"
-    
+    print(f"[DEBUG] base_model = {base_model} (type = {type(base_model)})")
     # 自动检测模型类型
     if model_type == "auto":
         if "qwen" in base_model.lower():
@@ -50,10 +50,11 @@ def main(
     
     # 加载tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        base_model, 
+       base_model, 
         trust_remote_code=True,
         local_files_only=True
     )
+    #tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
     
     # 特殊处理分词器
     if tokenizer.pad_token is None:
@@ -76,13 +77,22 @@ def main(
             trust_remote_code=True,
             local_files_only=True
         )
-        model = PeftModel.from_pretrained(
-            model,
-            lora_weights,
+        '''
+        model = LlamaForCausalLM.from_pretrained(
+            base_model,
+            load_in_8bit=load_8bit,
             torch_dtype=torch.float16,
             device_map="auto",
             local_files_only=True
-        )
+        )'''
+        if lora_weights is not None:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                local_files_only=True
+            )
     elif device == "mps":
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
@@ -135,7 +145,7 @@ def main(
         top_k=40,
         num_beams=1,
         do_sample=True,
-        max_new_tokens=32,
+        max_new_tokens=64,
         **kwargs,
     ):
         # 根据模型类型生成提示
@@ -147,7 +157,8 @@ def main(
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
 {instruction}
-
+Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 {input_text}<|im_end|>
 <|im_start|>assistant
 """
@@ -155,7 +166,8 @@ You are a helpful AI assistant.<|im_end|>
                     prompt = f"""<|im_start|>system
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
-{instruction}<|im_end|>
+{instruction}Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
 <|im_start|>assistant
 """
             else:
@@ -164,7 +176,7 @@ You are a helpful AI assistant.<|im_end|>
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Input:
 {input_text}
 
@@ -174,7 +186,7 @@ You are a helpful AI assistant.<|im_end|>
 
 ### Instruction:
 {instruction}
-
+Only output the name of the recommended thing. Do not include any explanations or extra information.
 ### Response:"""
             prompts.append(prompt)
         
@@ -219,6 +231,8 @@ You are a helpful AI assistant.<|im_end|>
                     response = output.split("assistant")[-1]
                     if "<|im_end|>" in response:
                         response = response.split("<|im_end|>")[0].strip()
+                    if "<|endoftext|>" in response:
+                        response = response.split("<|endoftext|>")[0].strip()
                     else:
                         # 如果没有结束标记，保留整个响应
                         response = response.strip()
@@ -251,7 +265,6 @@ You are a helpful AI assistant.<|im_end|>
             chunk_size = (len(list) - 1) // batch_size + 1
             for i in range(chunk_size):
                 yield list[batch_size * i: batch_size * (i + 1)]
-        
         # 分批处理
         for i, (batch_instructions, batch_inputs) in tqdm(
             enumerate(zip(batch(instructions), batch(inputs))), 
