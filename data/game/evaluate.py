@@ -15,7 +15,6 @@ for root, dirs, files in os.walk(args.input_dir):
         if name.endswith(".json"):
             path.append(os.path.join(root, name))
 print(f"{path}")
-#base_model = "base_models/Qwen2.5-7B"
 base_model = "base_models/llama-7b"
 # ====== 主要修改部分 ======
 # 自动识别模型类型并加载合适的分词器和模型
@@ -72,12 +71,14 @@ import pandas as pd
 for p in path:
     if p.endswith("_evaluation.json"):
         continue
+    '''
     if "llama" in base_model.lower() and "qwen" in p.lower():
         print(f"Skipping Qwen file for Llama model: {p}")
         continue
     if "qwen" in base_model.lower() and "llama" in p.lower():
         print(f"Skipping Llama file for Qwen model: {p}")
         continue
+    '''
     result_dict[p] = {
         "NDCG": [],
         "HR": [],

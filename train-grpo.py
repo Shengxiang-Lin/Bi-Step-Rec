@@ -66,20 +66,17 @@ def setup_logging(output_dir):
 class RewardCalculator:
     def __init__(self):
         self.similarity_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # 核心奖励权重
+        self.w_relevance = 2.0    # 相关性奖励权重
+        self.w_diversity = 1.0    # 多样性奖励权重
+        self.w_novelty = 0.8      # 新颖性奖励权重
+        # 惩罚权重
+        self.penalty_repeat = 2.0 # 重复历史项惩罚
+        self.penalty_irrelevant = 0.5  # 完全不相关惩罚
         # 阈值参数
-        self.theta_FN = 0.85  # 假负相似度阈值
-        self.theta_easy = 0.6  # 简单负样本阈值
-        self.theta_FP = 0.75  # 假正相似度阈值
-        self.theta_easy_low = 0.3  # 简单负样本低阈值
-        # 奖励权重
-        self.w1 = 0.8   # 困难负样本奖励
-        self.w2 = 1.5   # 假负样本惩罚
-        self.w3 = 1.5   # 假正样本惩罚
-        self.w4 = 0.8   # 简单负样本惩罚
-        self.w5 = 0.3   # 自适应温度奖励权重
-        # 多样性奖励权重
-        self.diversity_weight = 0.6
-        # 用于动态调整阈值
+        self.relevance_threshold = 0.3  # 完全不相关阈值
+        self.too_similar_threshold = 0.9  # 过于相似阈值
+        # 用于奖励归一化
         self.reward_history = []
         self.adjustment_counter = 0
     
@@ -88,10 +85,6 @@ class RewardCalculator:
         embedding1 = self.similarity_model.encode(text1, convert_to_tensor=True)
         embedding2 = self.similarity_model.encode(text2, convert_to_tensor=True)
         similarity = F.cosine_similarity(embedding1, embedding2, dim=0).item()
-        # 添加随机扰动 (10%概率)
-        if random.random() < 0.1:
-            perturbation = 0.2 * (random.random() - 0.5)  # ±10%扰动
-            similarity = min(1.0, max(-1.0, similarity + perturbation))
         return (similarity + 1) / 2  # 归一化到[0, 1]
     
     def extract_quoted_games(self, text: str) -> List[str]:
@@ -104,7 +97,7 @@ class RewardCalculator:
     
     def calculate_reward(self, user_history: str, generated_output: str) -> float:
         """
-        计算生成商品的奖励 - 仅基于双引号包裹的游戏名称
+        计算生成商品的奖励 - 基于相关性、多样性和新颖性
         """
         # 从用户历史中提取游戏名称
         history_games = self.extract_quoted_games(user_history)
@@ -113,78 +106,97 @@ class RewardCalculator:
         gen_game = gen_games[0] if gen_games else generated_output.strip()
         logging.info(f"history_games: {history_games}")
         logging.info(f"gen_game: {gen_game}")
-        # 计算与用户历史整体的相似度
-        history_text = " ".join(history_games)  # 将历史游戏连接成一个字符串
-        sim_to_history = self.compute_similarity(history_text, gen_game)
-        # 计算与每个历史游戏的最大相似度
-        sim_values = [self.compute_similarity(gen_game, game) for game in history_games]
-        sim_to_positive = max(sim_values) if sim_values else 0.0
-        # 1. 奖励困难负样本
-        if self.theta_easy < sim_to_history < self.theta_FN and sim_to_positive < self.theta_FP:
-            rhard = self.w1
-            logging.debug(f"Hard negative reward: {self.w1}")
-        else:
-            rhard = 0.0
-        # 2. 惩罚假负样本
-        rfalse = 0.0
-        if sim_to_history >= self.theta_FN:
-            rfalse -= self.w2
-            logging.debug(f"False negative penalty: -{self.w2}")
-        if sim_to_positive >= self.theta_FP:
-            rfalse -= self.w3
-            logging.debug(f"False positive penalty: -{self.w3}")
-        # 3. 惩罚简单负样本
-        reasy = -self.w4 if sim_to_history <= self.theta_easy_low else 0.0
-        if reasy < 0:
-            logging.debug(f"Easy negative penalty: -{self.w4}")
-        # 4. 自适应温度奖励
-        diversity = len(set(history_games)) / max(1, len(history_games))
-        T_ideal = 1 / (1 + np.log(1 + 1/max(diversity, 0.001)))
-        rtau = -self.w5 * abs(0.7 - T_ideal)
-        # 5. 多样性奖励
-        rdiversity = 0.0
-        if len(history_games) >= 3:
-            avg_sim = np.mean(sim_values) if sim_values else 0
-            if 0.5 <= avg_sim <= 0.7:
-                rdiversity = self.diversity_weight * (1 - abs(avg_sim - 0.6))
-            logging.debug(f"Diversity reward: {rdiversity:.2f}")
-        # 总奖励
-        total_reward = rhard + rfalse + reasy + rtau + rdiversity
-        # 记录奖励历史用于动态调整
-        self.reward_history.append(total_reward)
+        # 1. 检查是否重复历史项（严重惩罚）
+        if any(gen_game.lower() == game.lower() for game in history_games):
+            total_reward = -self.penalty_repeat
+            logging.info(f"Repeat penalty: -{self.penalty_repeat}")
+            return total_reward
+        # 2. 计算相关性奖励
+        relevance = self.compute_relevance(history_games, gen_game)
+        reward = self.w_relevance * relevance
+        # 3. 计算多样性奖励
+        diversity = self.compute_diversity(history_games, gen_game)
+        reward += self.w_diversity * diversity
+        # 4. 计算新颖性奖励
+        novelty = self.compute_novelty(history_games, gen_game)
+        reward += self.w_novelty * novelty
+        # 5. 添加惩罚项（轻微）
+        if relevance < self.relevance_threshold:  # 完全不相关
+            reward -= self.penalty_irrelevant
+            logging.debug(f"Irrelevant penalty: -{self.penalty_irrelevant}")
+        elif novelty < 0.2:  # 与历史游戏过于相似
+            reward -= self.penalty_irrelevant * 0.5
+            logging.debug(f"Too similar penalty: -{self.penalty_irrelevant*0.5}")
+        # 记录奖励历史用于归一化
+        self.reward_history.append(reward)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
-        # 动态调整阈值
-        self.adjustment_counter += 1
-        if self.adjustment_counter >= 100:
-            self.adjust_thresholds()
-            self.adjustment_counter = 0
+        # 归一化奖励（基于近期奖励分布）
+        if len(self.reward_history) >= 10:
+            mean_reward = np.mean(self.reward_history)
+            std_reward = np.std(self.reward_history)
+            if std_reward > 0:
+                normalized_reward = (reward - mean_reward) / std_reward
+                # 限制在[-2, 2]范围内
+                total_reward = max(-2.0, min(2.0, normalized_reward))
+            else:
+                total_reward = reward
+        else:
+            total_reward = reward
         # 日志记录
-        logging.debug(f"Generated game: {gen_game}")
-        logging.debug(f"User history games: {history_games}")
-        logging.debug(f"Sim to history: {sim_to_history:.4f}, Max sim to positive: {sim_to_positive:.4f}")
-        logging.debug(f"Rhard: {rhard:.2f}, Rfalse: {rfalse:.2f}, Reasy: {reasy:.2f}, Rtau: {rtau:.2f}, Rdiversity: {rdiversity:.2f}, Total: {total_reward:.2f}")
-        
+        logging.info(f"Relevance: {relevance:.4f}, Diversity: {diversity:.4f}, Novelty: {novelty:.4f}")
+        logging.info(f"Reward: {reward:.2f}, Normalized: {total_reward:.2f}")
         return total_reward
     
-    def adjust_thresholds(self):
-        """根据最近100个样本的奖励表现动态调整阈值"""
-        if len(self.reward_history) < 50:
-            return
-        avg_reward = np.mean(self.reward_history)
-        logging.info(f"Adjusting thresholds based on average reward: {avg_reward:.2f}")
-        # 如果平均奖励过高，收紧阈值
-        if avg_reward > 0.85:
-            self.theta_FN = min(0.95, self.theta_FN + 0.01)
-            self.theta_FP = min(0.85, self.theta_FP + 0.01)
-            self.theta_easy = min(0.7, self.theta_easy + 0.01)
-            logging.info(f"Tightening thresholds: FN={self.theta_FN:.2f}, FP={self.theta_FP:.2f}, Easy={self.theta_easy:.2f}")
-        # 如果平均奖励过低，放宽阈值
-        elif avg_reward < 0.4:
-            self.theta_FN = max(0.7, self.theta_FN - 0.01)
-            self.theta_FP = max(0.6, self.theta_FP - 0.01)
-            self.theta_easy = max(0.4, self.theta_easy - 0.01)
-            logging.info(f"Loosening thresholds: FN={self.theta_FN:.2f}, FP={self.theta_FP:.2f}, Easy={self.theta_easy:.2f}")
+    def compute_relevance(self, history: List[str], gen_game: str) -> float:
+        """计算生成游戏与用户历史的相关性"""
+        if not history:
+            return 0.7  # 默认相关性（无历史时）
+        # 使用加权平均相似度（近期历史权重更高）
+        weights = [0.9**i for i in range(len(history))]  # 指数衰减权重
+        weights.reverse()  # 最近的项目权重最高
+        total_weight = sum(weights)
+        similarities = [self.compute_similarity(gen_game, game) for game in history]
+        weighted_avg = sum(s * w for s, w in zip(similarities, weights)) / total_weight
+        # 应用S形函数增强相关性感知
+        return 1 / (1 + np.exp(-10 * (weighted_avg - 0.5)))
+    
+    def compute_diversity(self, history: List[str], gen_game: str) -> float:
+        """计算生成游戏带来的多样性增益"""
+        if len(history) < 2:
+            return 0.5  # 小样本时默认中等多样性
+        # 计算历史集合的多样性
+        history_sims = []
+        for i in range(len(history)):
+            for j in range(i+1, len(history)):
+                history_sims.append(self.compute_similarity(history[i], history[j]))
+        hist_diversity = 1 - np.mean(history_sims) if history_sims else 0
+        # 计算加入新游戏后的多样性
+        new_history = history + [gen_game]
+        new_sims = []
+        for i in range(len(new_history)):
+            for j in range(i+1, len(new_history)):
+                new_sims.append(self.compute_similarity(new_history[i], new_history[j]))
+        new_diversity = 1 - np.mean(new_sims) if new_sims else 0
+        # 多样性增益
+        diversity_gain = max(0, new_diversity - hist_diversity)
+        # 应用对数变换增强小增益感知
+        return np.log1p(diversity_gain * 10) / 2.0
+    
+    def compute_novelty(self, history: List[str], gen_game: str) -> float:
+        """计算生成游戏的新颖性（与历史最小相似度）"""
+        if not history:
+            return 1.0  # 无历史时完全新颖
+        # 计算与所有历史游戏的最小相似度
+        min_sim = min(self.compute_similarity(gen_game, game) for game in history)
+        # 新颖性 = 1 - 最小相似度
+        novelty = 1 - min_sim
+        # 应用非线性变换（奖励中等新颖性）
+        if novelty < 0.3:
+            return novelty * 0.5  # 低新颖性折扣
+        elif novelty > 0.7:
+            return min(1.0, novelty * 1.2)  # 高新颖性奖励
+        return novelty
 
 # 使用新的提示模板格式
 def generate_prompt(data_point: Dict[str, Any]) -> str:
@@ -215,8 +227,7 @@ def generate_prediction_prompt(data_point: Dict[str, Any]) -> str:
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
 {data_point["instruction"]}
-Only output in the following format, including the end token:
-"<name of the recommended thing>"<|im_end|>
+Only output in the following format, including the end token:"<name of the recommended thing>"<|im_end|>
 {data_point["input"]}<|im_end|>
 <|im_start|>assistant
 """
@@ -224,8 +235,7 @@ Only output in the following format, including the end token:
         return f"""<|im_start|>system
 You are a helpful AI assistant.<|im_end|>
 <|im_start|>user
-{data_point["instruction"]}Only output in the following format, including the end token:
-"<name of the recommended thing>"<|im_end|>
+{data_point["instruction"]}Only output in the following format, including the end token:"<name of the recommended thing>"<|im_end|>
 <|im_start|>assistant
 """
 
@@ -281,11 +291,11 @@ class EpochLoggingCallback(TrainerCallback):
 def train_grpo(
     load_8bit: bool = False,
     base_model_path: str = "base_models/Qwen2.5-3B-Instruct",  # 基础模型路径
-    sft_lora_weights: str = "./Qwen2.5-3B-Instruct-game-base-0/checkpoint-32",  # SFT阶段保存的LoRA权重
+    sft_lora_weights: str = None,#"./Qwen2.5-3B-Instruct-game-base-0/checkpoint-32",  # SFT阶段保存的LoRA权重
     train_data_path: List[str] = ["data/game/dataset/processed/train.json"],
     val_data_path: List[str] = ["data/game/dataset/processed/valid_5000.json"],
-    output_dir: str = "./Qwen2.5-3B-Instruct-grpo-recommender",
-    seed: int = 42,
+    output_dir: str = "./Qwen2.5-3B-Instruct-grpo-0-0",
+    seed: int = 0,
     batch_size: int = 8,
     num_epochs: int = 3,  # RL训练通常需要较少轮次
     learning_rate: float = 1e-6,
@@ -387,6 +397,7 @@ def train_grpo(
         device_map="auto",
         local_files_only=True
     )
+    model = base_model
     if sft_lora_weights is not None:
     # 加载SFT阶段的LoRA权重
         logging.info(f"Loading SFT LoRA weights from: {sft_lora_weights}")
@@ -458,7 +469,7 @@ def train_grpo(
         num_generations=4,  # 每个提示生成4个补全
         temperature=0.7,  # 采样温度
         max_completion_length=64,  # 最大补全长度
-        beta=0.04,          # KL系数
+        beta=0.01,          # KL系数
         remove_unused_columns=False,  # 保留所有列以便奖励计算
         # 生成参数
         max_prompt_length=cutoff_len,  # 最大提示长度
@@ -468,9 +479,9 @@ def train_grpo(
         gradient_checkpointing=False,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         # 评估设置
-        eval_strategy="no",        # 每个epoch结束后进行评估
+        eval_strategy="no",           # 每个epoch结束后进行评估
         save_strategy="epoch",        # 每个epoch结束后保存模型
-        save_total_limit=2,           # 最多保存2个检查点
+        save_total_limit=5,           # 最多保存2个检查点
     )
     # 创建GRPO训练器
     logging.info("Creating GRPOTrainer")

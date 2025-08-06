@@ -9,8 +9,7 @@ import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 from peft import PeftModel
-from transformers import GenerationConfig,  LlamaTokenizer
-from transformers import LlamaForCausalLM
+from transformers import GenerationConfig, AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -24,59 +23,134 @@ except:  # noqa: E722
 
 def main(
     load_8bit: bool = False,
-    base_model: str = "base_models/llama-7b",
-    lora_weights: str = "lora-alpaca-game/checkpoint-40",
+    base_model: str = "base_models/Qwen2.5-3B-Instruct",
+    lora_weights: str = "Qwen2.5-3B-Instruct-game-base-0/checkpoint-32",
+    grpo_lora_weights: str = "Qwen2.5-3B-Instruct-grpo-0-32/checkpoint-320",
     test_data_path: str = "data/game/dataset/processed/test_5000.json",
-    result_json_data: str = "data/game/result/game.json",
-    batch_size: int=16,
+    result_json_data: str = "data/game/result/qwen/2025-8-6/Qwen2.5-3B-Instruct-game-base-0-32+320-2.json",
+    batch_size: int = 32,
+    model_type: str = "auto",  # auto/llama/qwen
 ):
     assert (
         base_model
-    ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
-    tokenizer = LlamaTokenizer.from_pretrained(base_model, local_files_only=True)
+    ), "Please specify a --base_model, e.g. --base_model='base_models/llama-7b'"
+    print(f"[DEBUG] base_model = {base_model} (type = {type(base_model)})")
+    # 自动检测模型类型
+    if model_type == "auto":
+        if "qwen" in base_model.lower():
+            model_type = "qwen"
+            print("Auto-detected model type: Qwen")
+        elif "llama" in base_model.lower():
+            model_type = "llama"
+            print("Auto-detected model type: Llama")
+        else:
+            model_type = "llama"
+            print("Using default model type: Llama")
+    else:
+        print(f"Using specified model type: {model_type}")
+    
+    # 加载tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+       base_model, 
+        trust_remote_code=True,
+        local_files_only=True
+    )
+    
+    # 特殊处理分词器
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+    
+    # Qwen2需要设置特殊token
+    if model_type == "qwen":
+        tokenizer.eos_token = "<|im_end|>"
+        tokenizer.bos_token = "<|im_start|>"
+        tokenizer.pad_token = "<|endoftext|>"
+    
+    # 加载基础模型
     if device == "cuda":
-        model = LlamaForCausalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(
             base_model,
             load_in_8bit=load_8bit,
             torch_dtype=torch.float16,
             device_map="auto",
+            trust_remote_code=True,
             local_files_only=True
         )
-        model = PeftModel.from_pretrained(
-            model,
-            lora_weights,
-            torch_dtype=torch.float16,
-            device_map="auto"
-        )
+        if lora_weights is not None:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights,
+                torch_dtype=torch.float16,
+                adapter_name='sft',
+                device_map="auto",
+                local_files_only=True
+            )
     elif device == "mps":
-        model = LlamaForCausalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(
             base_model,
             device_map={"": device},
             torch_dtype=torch.float16,
+            trust_remote_code=True,
         )
-        model = PeftModel.from_pretrained(
-            model,
-            lora_weights,
-            device_map={"": device},
-            torch_dtype=torch.float16,
-        )
+        if lora_weights is not None:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights,
+                device_map={"": device},
+                torch_dtype=torch.float16,
+            )
     else:
-        model = LlamaForCausalLM.from_pretrained(
-            base_model, device_map={"": device}, low_cpu_mem_usage=True
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model, 
+            device_map={"": device}, 
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
         )
-        model = PeftModel.from_pretrained(
-            model,
-            lora_weights,
-            device_map={"": device},
+        if lora_weights is not None:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights,
+                device_map={"": device},
+            )
+    
+    # ====== 新增GRPO LoRA层加载逻辑 ======
+    if grpo_lora_weights:
+        print(f'Loading GRPO LoRA weights: {grpo_lora_weights}')
+        model.load_adapter(
+            grpo_lora_weights,
+            adapter_name='grpo',
+            device_map='auto',
+            torch_dtype=torch.float16,
+            local_files_only=True
         )
-
-    tokenizer.padding_side = "left"
-    # unwind broken decapoda-research config
-    model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-    model.config.bos_token_id = 1
-    model.config.eos_token_id = 2
+        # 立即设置GRPO为活动适配器
+        model.set_adapter('grpo')
+        # 然后合并SFT适配器（如果存在）
+        if 'sft' in model.peft_config:
+            print("Merging SFT adapter into base model")
+            model.merge_adapter(adapter_names=['sft'])
+        print('GRPO adapter activated')
+    else:
+        print('Skipping GRPO LoRA weights, using only SFT adapter')
+        if 'sft' in model.peft_config:
+            model.set_adapter('sft')
+    # ====== GRPO加载结束 ======
+        
+    # 确保模型配置正确
+    if model_type == "qwen":
+        model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.eos_token_id = tokenizer.eos_token_id
+        model.config.bos_token_id = tokenizer.bos_token_id
+    else:
+        # 对于Llama模型，设置特殊token
+        model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
+        model.config.bos_token_id = 1
+        model.config.eos_token_id = 2
+    
     if not load_8bit:
         model.half()  # seems to fix bugs for some users.
+    
     model.eval()
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
@@ -84,16 +158,65 @@ def main(
     def evaluate(
         instructions,
         inputs=None,
-        temperature=0,
+        temperature=0.2,
         top_p=0.9,
         top_k=40,
-        num_beams=4,
-        do_sample=False,
-        max_new_tokens=16,
+        num_beams=1,
+        do_sample=True,
+        max_new_tokens=64,
         **kwargs,
     ):
-        prompt = [generate_prompt(instruction, input) for instruction, input in zip(instructions, inputs)]
-        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(device)
+        # 根据模型类型生成提示
+        prompts = []
+        for instruction, input_text in zip(instructions, inputs or [None]*len(instructions)):
+            if model_type == "qwen":
+                if input_text:
+                    prompt = f"""<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+{instruction}
+Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
+{input_text}<|im_end|>
+<|im_start|>assistant
+"""
+                else:
+                    prompt = f"""<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+{instruction}Only output in the following format, including the end token:
+"<name of the recommended thing>"<|im_end|>
+<|im_start|>assistant
+"""
+            else:
+                if input_text:
+                    prompt = f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.  
+
+### Instruction:
+{instruction}
+Only output the name of the recommended thing. Do not include any explanations or extra information.
+### Input:
+{input_text}
+
+### Response:"""
+                else:
+                    prompt = f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
+
+### Instruction:
+{instruction}
+Only output the name of the recommended thing. Do not include any explanations or extra information.
+### Response:"""
+            prompts.append(prompt)
+        
+        # 编码输入
+        inputs = tokenizer(
+            prompts, 
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True,
+            max_length=1024
+        ).to(device)
+        
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,
@@ -103,6 +226,7 @@ def main(
             num_return_sequences=num_beams,
             **kwargs,
         )
+        
         with torch.no_grad():
             generation_output = model.generate(
                 **inputs,
@@ -110,12 +234,43 @@ def main(
                 return_dict_in_generate=True,
                 output_scores=True,
                 max_new_tokens=max_new_tokens,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id
             )
+        
         s = generation_output.sequences
-        output = tokenizer.batch_decode(s, skip_special_tokens=True)
-        output = [_.split('Response:\n')[-1] for _ in output]
-        real_outputs = [output[i * num_beams: (i + 1) * num_beams] for i in range(len(output) // num_beams)]
-        return real_outputs
+
+        outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
+        # 根据模型类型提取响应
+        real_outputs = []
+        for output in outputs:
+            if model_type == "qwen":
+                if "assistant" in output:
+                    response = output.split("assistant")[-1]
+                    if "<|im_end|>" in response:
+                        response = response.split("<|im_end|>")[0].strip()
+                    if "<|endoftext|>" in response:
+                        response = response.split("<|endoftext|>")[0].strip()
+                    else:
+                        # 如果没有结束标记，保留整个响应
+                        response = response.strip()
+                else:
+                    # 如果格式不匹配，返回整个输出
+                    response = output.strip()
+            else:
+                if "### Response:" in output:
+                    response = output.split("### Response:")[-1].strip()
+                    if "###" in response:
+                        response = response.split("###")[0].strip()
+                else:
+                    # 如果格式不匹配，返回整个输出
+                    response = output.strip()
+            real_outputs.append(response)
+        
+        # 分组为每个输入的多个输出
+        grouped_outputs = [real_outputs[i * num_beams: (i + 1) * num_beams] 
+                           for i in range(len(real_outputs) // num_beams)]
+        return grouped_outputs
 
     outputs = []
     from tqdm import tqdm
@@ -123,41 +278,33 @@ def main(
         test_data = json.load(f)
         instructions = [_['instruction'] for _ in test_data]
         inputs = [_['input'] for _ in test_data]
+        
         def batch(list, batch_size=batch_size):
             chunk_size = (len(list) - 1) // batch_size + 1
             for i in range(chunk_size):
                 yield list[batch_size * i: batch_size * (i + 1)]
-        for i, batch in tqdm(enumerate(zip(batch(instructions), batch(inputs)))):
-            instructions, inputs = batch
-            output = evaluate(instructions, inputs)
-            outputs = outputs + output          
-        for i, test in tqdm(enumerate(test_data)):
+        # 分批处理
+        for i, (batch_instructions, batch_inputs) in tqdm(
+            enumerate(zip(batch(instructions), batch(inputs))), 
+            total=(len(instructions)-1)//batch_size+1
+        ):
+            batch_outputs = evaluate(batch_instructions, batch_inputs)
+            outputs.extend(batch_outputs)
+        
+        # 将预测结果添加到测试数据中
+        for i, test in enumerate(test_data):
             test_data[i]['predict'] = outputs[i]
 
+    # 确保结果目录存在
     result_dir = os.path.dirname(result_json_data)
     if not os.path.exists(result_dir):
         os.makedirs(result_dir, exist_ok=True)
+    
+    # 保存结果
     with open(result_json_data, 'w') as f:
         json.dump(test_data, f, indent=4)
-
-def generate_prompt(instruction, input=None):
-    if input:
-        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.  
-
-### Instruction:
-{instruction}
-
-### Input:
-{input}
-
-### Response:"""
-    else:
-        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
-
-### Instruction:
-{instruction}
-
-### Response:"""
+    
+    print(f"Evaluation complete. Results saved to: {result_json_data}")
 
 if __name__ == "__main__":
     fire.Fire(main)
