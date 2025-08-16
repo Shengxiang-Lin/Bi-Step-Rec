@@ -1,7 +1,7 @@
 from huggingface_hub import snapshot_download
 # Model repository list
 repos = [
-    "Qwen/Qwen2.5-32B-Instruct"
+    "Qwen/Qwen2.5-0.5B-Instruct"
     #"Qwen/Qwen2-7B-Instruct"
     #"huggyllama/llama-7b"
 ]

@@ -3,7 +3,7 @@ import torch
 import os
 import math
 import json
-#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,2"
 import argparse
 parse = argparse.ArgumentParser()
 parse.add_argument("--input_dir",type=str, default="./", help="your model directory")

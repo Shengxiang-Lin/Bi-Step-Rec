@@ -9,5 +9,5 @@ git+https://github.com/huggingface/peft.git
 transformers==4.53.3    
 sentencepiece==0.2.0  
 gradio==5.38.0
-sentence-transformers
-trl
+sentence-transformers==5.0.0
+nltk==3.9.1
