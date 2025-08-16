@@ -33,15 +33,12 @@ from peft import (
 )
 from sentence_transformers import SentenceTransformer
 import re
-
-# 添加本地 TRL 路径到系统路径
 trl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "trl"))
 if trl_path not in sys.path:
     sys.path.insert(0, trl_path)
 from trl import GRPOTrainer, GRPOConfig
 import torch.nn.functional as F
 
-# 配置日志系统
 def setup_logging(output_dir):
     logs_dir = os.path.join(output_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
@@ -60,35 +57,27 @@ def setup_logging(output_dir):
 
 class RewardCalculator:
     def __init__(self):
-        # 优化：使用更强大的嵌入模型
         self.sentence_transformer_cache = "./sentence_transformer_cache"
         os.makedirs(self.sentence_transformer_cache, exist_ok=True)
         self.similarity_model = SentenceTransformer(
             'all-mpnet-base-v2',
             cache_folder=self.sentence_transformer_cache 
         )
-        # 优化：添加嵌入缓存
         self.embedding_cache = {}
-        # 核心奖励权重（初始值）
         self.w_relevance = 2.0
         self.w_diversity = 1.0
         self.w_novelty = 0.8
-        # 优化：EMA 平滑权重
         self.ema_alpha = 0.9
         self.reward_history = []
         self.component_stds = {'relevance': [], 'diversity': [], 'novelty': []}
-        # 惩罚权重
-        self.penalty_repeat_base = 2.0  # 基础重复惩罚
+        self.penalty_repeat_base = 2.0
         self.penalty_irrelevant = 0.5
-        # 优化：游戏出现频率统计
         self.game_freq = {}
-        # 阈值参数
         self.relevance_threshold = 0.3
         self.too_similar_threshold = 0.9
         self.adjustment_counter = 0
     
     def compute_similarity(self, text1: str, text2: str) -> float:
-        """计算两个游戏名称之间的余弦相似度"""
         cache_key = (text1, text2)
         if cache_key in self.embedding_cache:
             similarity = self.embedding_cache[cache_key]
@@ -96,7 +85,7 @@ class RewardCalculator:
             embedding1 = self.similarity_model.encode(text1, convert_to_tensor=True)
             embedding2 = self.similarity_model.encode(text2, convert_to_tensor=True)
             similarity = F.cosine_similarity(embedding1, embedding2, dim=0).item()
-            similarity = (similarity + 1) / 2  # 归一化到 [0, 1]
+            similarity = (similarity + 1) / 2
             self.embedding_cache[cache_key] = similarity
         return similarity
     
@@ -106,30 +95,24 @@ class RewardCalculator:
         return games
     
     def update_weights(self, relevance: float, diversity: float, novelty: float):
-        """使用 EMA 动态更新权重"""
         self.component_stds['relevance'].append(relevance)
         self.component_stds['diversity'].append(diversity)
         self.component_stds['novelty'].append(novelty)
-        
         if len(self.component_stds['relevance']) > 100:
             self.component_stds['relevance'].pop(0)
             self.component_stds['diversity'].pop(0)
             self.component_stds['novelty'].pop(0)
-        
         if len(self.component_stds['relevance']) >= 10:
             std_rel = np.std(self.component_stds['relevance']) + 1e-6
             std_div = np.std(self.component_stds['diversity']) + 1e-6
             std_nov = np.std(self.component_stds['novelty']) + 1e-6
             total_std = std_rel + std_div + std_nov
-            
             new_w_rel = std_rel / total_std
             new_w_div = std_div / total_std
             new_w_nov = std_nov / total_std
-            
             self.w_relevance = self.ema_alpha * self.w_relevance + (1 - self.ema_alpha) * new_w_rel
             self.w_diversity = self.ema_alpha * self.w_diversity + (1 - self.ema_alpha) * new_w_div
             self.w_novelty = self.ema_alpha * self.w_novelty + (1 - self.ema_alpha) * new_w_nov
-            
             logging.info(f"Updated weights: relevance={self.w_relevance:.4f}, diversity={self.w_diversity:.4f}, novelty={self.w_novelty:.4f}")
     
     def calculate_reward(self, user_history: str, generated_output: str) -> float:
@@ -138,8 +121,6 @@ class RewardCalculator:
         gen_game = gen_games[0] if gen_games else generated_output.strip()
         logging.info(f"history_games: {history_games}")
         logging.info(f"gen_game: {gen_game}")
-        
-        # 优化：动态重复惩罚
         gen_game_lower = gen_game.lower()
         self.game_freq[gen_game_lower] = self.game_freq.get(gen_game_lower, 0) + 1
         if any(gen_game_lower == game.lower() for game in history_games):
@@ -147,31 +128,20 @@ class RewardCalculator:
             total_reward = -penalty_repeat
             logging.info(f"Repeat penalty: -{penalty_repeat:.2f}")
             return total_reward
-        
-        # 计算相关性、多样性和新颖性
         relevance = self.compute_relevance(history_games, gen_game)
         diversity = self.compute_diversity(history_games, gen_game)
         novelty = self.compute_novelty(history_games, gen_game)
-        
-        # 更新权重
         self.update_weights(relevance, diversity, novelty)
-        
-        # 计算奖励
         reward = self.w_relevance * relevance + self.w_diversity * diversity + self.w_novelty * novelty
-        
-        # 添加惩罚项
         if relevance < self.relevance_threshold:
             reward -= self.penalty_irrelevant
             logging.debug(f"Irrelevant penalty: -{self.penalty_irrelevant}")
         elif novelty < 0.2:
             reward -= self.penalty_irrelevant * 0.5
             logging.debug(f"Too similar penalty: -{self.penalty_irrelevant*0.5}")
-        
-        # 优化：使用中位数和 IQR 归一化
         self.reward_history.append(reward)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
-        
         if len(self.reward_history) >= 10:
             median_reward = np.median(self.reward_history)
             iqr = np.percentile(self.reward_history, 75) - np.percentile(self.reward_history, 25)
@@ -182,7 +152,6 @@ class RewardCalculator:
                 total_reward = reward
         else:
             total_reward = reward
-        
         logging.info(f"Relevance: {relevance:.4f}, Diversity: {diversity:.4f}, Novelty: {novelty:.4f}")
         logging.info(f"Reward: {reward:.2f}, Normalized: {total_reward:.2f}")
         return total_reward
@@ -293,7 +262,6 @@ class EpochLoggingCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
         epoch_end_time = datetime.datetime.now()
         epoch_num = int(state.epoch) if state.epoch is not None else 0
-        
         if self.epoch_start_time:
             epoch_duration = epoch_end_time - self.epoch_start_time
             self.epoch_times.append(epoch_duration)
@@ -333,9 +301,8 @@ def train_grpo(
     logging.info(f"GRPO training started at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"Using Qwen model: {base_model_path}")
     logging.info(f"Training Parameters: Epochs={num_epochs}, Batch Size={batch_size}, Learning Rate={learning_rate}")
-    
     reward_calculator = RewardCalculator()
-    
+
     def load_data(paths: List[str], is_train: bool = False, sample: int = -1) -> Dataset:
         datasets = []
         for path in paths:
@@ -345,7 +312,6 @@ def train_grpo(
             else:
                 dataset = load_dataset(path)["train"]
             datasets.append(dataset)
-        
         concatenated = concatenate_datasets(datasets)
         if is_train and sample > -1:
             logging.info(f"Sampling {sample} examples from training dataset")
@@ -366,7 +332,6 @@ def train_grpo(
         rewards = []
         for prompt, completion in zip(prompts, completions):
             try:
-                # 使用更健壮的方法提取用户历史
                 match = re.search(r'<\|im_start\|>user\s*.*?<\|im_end\|>\s*(.*?)(<\|im_end\|>|$)', prompt, re.DOTALL)
                 user_history = match.group(1).strip() if match else ""
                 reward = reward_calculator.calculate_reward(user_history, completion)
@@ -374,13 +339,11 @@ def train_grpo(
             except Exception as e:
                 logging.error(f"Error calculating reward: {e}")
                 rewards.append(0.0)
-        
         if rewards:
             min_reward = min(rewards)
             max_reward = max(rewards)
             avg_reward = sum(rewards) / len(rewards)
             logging.info(f"Batch rewards - Min: {min_reward:.2f}, Max: {max_reward:.2f}, Avg: {avg_reward:.2f}")
-        
         return rewards
     
     def prepare_prompts(dataset: Dataset) -> List[Dict[str, str]]:
@@ -392,9 +355,7 @@ def train_grpo(
     
     train_prompts = prepare_prompts(train_data)
     val_prompts = prepare_prompts(val_data)
-    
     logging.info(f"Loading base model from: {base_model_path}")
-    
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
         load_in_8bit=load_8bit,
@@ -403,7 +364,6 @@ def train_grpo(
         local_files_only=True
     )
     model = base_model
-    
     if sft_lora_weights is not None:
         logging.info(f"Loading SFT LoRA weights from: {sft_lora_weights}")
         model = PeftModel.from_pretrained(
@@ -416,7 +376,6 @@ def train_grpo(
             adapter_name="sft_adapter",
         )
         model = model.merge_and_unload()
-    
     tokenizer = AutoTokenizer.from_pretrained(
         base_model_path,
         trust_remote_code=True,
@@ -424,7 +383,6 @@ def train_grpo(
     )
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
-    
     model = prepare_model_for_kbit_training(model)
     logging.info("Adding new LoRA layers for GRPO training")
     peft_config = LoraConfig(
@@ -438,18 +396,15 @@ def train_grpo(
     )
     model.add_adapter(peft_config, "grpo_adapter")
     model.set_adapter("grpo_adapter")
-    
     model.requires_grad_(False)
     for name, param in model.named_parameters():
         if "grpo_adapter" in name:
             param.requires_grad = True
         else:
             param.requires_grad = False
-    
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
     logging.info(f"Trainable parameters: {trainable_params} | Total parameters: {total_params} | Percentage: {trainable_params/total_params*100:.4f}%")
-    
     config = GRPOConfig(
         output_dir=output_dir,
         per_device_train_batch_size=2,
@@ -467,13 +422,12 @@ def train_grpo(
         max_prompt_length=cutoff_len,
         logging_steps=50,
         report_to="tensorboard",
-        gradient_checkpointing=False,  # 禁用梯度检查点
+        gradient_checkpointing=False, 
         gradient_checkpointing_kwargs={"use_reentrant": False},
-        eval_strategy="no",  # 禁用内置评估
+        eval_strategy="no",
         save_strategy="epoch",
         save_total_limit=5,
     )
-    
     logging.info("Creating GRPOTrainer")
     trainer = GRPOTrainer(
         model=model,
@@ -482,15 +436,12 @@ def train_grpo(
         train_dataset=train_prompts,
         eval_dataset=val_prompts
     )
-    trainer.model.config.use_cache = False  # 确保禁用缓存
-    
+    trainer.model.config.use_cache = False
     if trainer.tokenizer.pad_token is None:
         trainer.tokenizer.pad_token = trainer.tokenizer.eos_token
     trainer.tokenizer.padding_side = "left"
-    
     trainer.add_callback(SavePeftModelCallback())
     trainer.add_callback(EpochLoggingCallback())
-    
     logging.info("Starting GRPO training...")
     start_time = datetime.datetime.now()
     trainer.train()
@@ -500,21 +451,17 @@ def train_grpo(
     logging.info(f"Total Training Time: {training_duration}")
     logging.info(f"Average Time per Epoch: {training_duration / num_epochs}")
     logging.info(f"{'='*50}\n")
-    
     save_path = os.path.join(output_dir, "final_model")
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
     logging.info(f"GRPO training complete. Model saved to: {save_path}")
-    
-    # 手动评估模型
     logging.info("Starting manual evaluation...")
     avg_reward = evaluate_grpo_model(
-        model,  # 使用训练好的模型
+        model,
         tokenizer,
         val_data,
         reward_calculator
     )
-    
     with open(os.path.join(output_dir, "evaluation_results.json"), "w") as f:
         json.dump({
             "average_reward": avg_reward,
@@ -530,13 +477,11 @@ def train_grpo(
         }, f, indent=2)
 
 def evaluate_grpo_model(model, tokenizer, dataset, reward_calculator, num_samples=50):
-    """手动评估训练好的模型"""
     logging.info("Evaluating GRPO model...")
     sample_indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
     total_reward = 0
     rewards = []
     results = []
-    
     for idx in sample_indices:
         data_point = dataset[idx]
         prompt = generate_prediction_prompt(data_point)
@@ -552,23 +497,19 @@ def evaluate_grpo_model(model, tokenizer, dataset, reward_calculator, num_sample
             num_return_sequences=1,
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
-            use_cache=False  # 在评估时也禁用缓存
+            use_cache=False
         )
-        
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
-        # 更健壮的输出提取
         if "<|im_start|>assistant" in generated_text:
             generated_output = generated_text.split("<|im_start|>assistant")[-1].strip()
             if "<|im_end|>" in generated_output:
                 generated_output = generated_output.split("<|im_end|>")[0].strip()
         else:
             generated_output = generated_text.strip()
-        
         user_history = data_point.get("input", "")
         reward = reward_calculator.calculate_reward(user_history, generated_output)
         rewards.append(reward)
         total_reward += reward
-        
         result = {
             "user_history": user_history,
             "generated_recommendation": generated_output,
@@ -581,7 +522,6 @@ def evaluate_grpo_model(model, tokenizer, dataset, reward_calculator, num_sample
         logging.info(f"Generated Recommendation: {generated_output}")
         logging.info(f"Reward: {reward:.4f}")
         logging.info("-" * 50)
-    
     avg_reward = total_reward / num_samples
     min_reward = min(rewards)
     max_reward = max(rewards)
@@ -589,11 +529,9 @@ def evaluate_grpo_model(model, tokenizer, dataset, reward_calculator, num_sample
     logging.info(f"Average Reward: {avg_reward:.4f}")
     logging.info(f"Min Reward: {min_reward:.4f}")
     logging.info(f"Max Reward: {max_reward:.4f}")
-    
     eval_dir = os.path.join(model.config._name_or_path, "evaluation")
     os.makedirs(eval_dir, exist_ok=True)
     eval_path = os.path.join(eval_dir, "detailed_evaluation.json")
-    
     with open(eval_path, "w") as f:
         json.dump({
             "average_reward": avg_reward,
@@ -601,7 +539,6 @@ def evaluate_grpo_model(model, tokenizer, dataset, reward_calculator, num_sample
             "max_reward": max_reward,
             "samples": results
         }, f, indent=2)
-    
     logging.info(f"Detailed evaluation saved to: {eval_path}")
     return avg_reward
 
